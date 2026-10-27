@@ -8,9 +8,19 @@ of its functions, objects and memory: "explain what the Sort operator is doing",
 vectors for", "why is the hash join calling ReadRow twice per row", "what does this field of the iterator hold".
 
 Answers to these are longer, come from several commands run in sequence, and are organised by phase. Everything
-in them should be checkable: cite node ids, iterator addresses, block numbers, positions and counts, so the reader
-can open the same thing in the app. Keep what the export records apart from what the names suggest, and say which
-is which.
+in them should be checkable: cite node ids, iterator addresses, block numbers, positions and counts, so a reader
+who does have the run open in Internals Viewer can find the same thing. The answer itself never depends on that:
+assume the export is all the user has in front of them, and mention the app's views only as an aside that says
+"if you have the run open". Keep what the export records apart from what the names suggest, and say which is
+which.
+
+The depth is set by the question, not by the file. Internals Viewer is a learning tool and the trace is the exact
+record of what happened, so a beginner's "what is the hash join doing" and an expert's "explain what is happening
+with the scratch buffers in the RLE decompression" are answered from the same export. The first wants the shape:
+build, then probe. The second wants the columnstore decode pipeline: the `XMRLE*`, `XMHybridRLE*` and `RbpDecode`
+calls under the scan, the buffers they allocated by site in the memory map, and the writes to those buffers with
+their writers in the memory history. Neither is a tuning exercise. What the optimizer should have chosen is outside
+the tool; what the engine did with the plan it was given is all of it.
 
 ## What the export holds for this
 
@@ -158,7 +168,15 @@ To answer "what is the batch using these vectors for":
 `CEsExec::GeneralEval*`, `CEsRuntime::Eval`, `CValConstXVar::GetDataX` and `sqlTsEs!GetData` are the expression
 service evaluating predicates, seek keys and computed columns, and their counts say how many times an expression
 ran. `plan --detail` gives the expression text per operator. A `clr!` module in the call list means a CLR
-function (`FORMAT`, `TRY_PARSE`, user CLR) was invoked from the expression.
+function (`FORMAT`, `TRY_PARSE`, user CLR) was invoked from the expression. "Does it filter there?" is answered
+from the export by the evaluation calls under the operator: `calltree --find "CEsExec::(FastCompare|GeneralEval)"
+--operator N` shows which of its paths evaluate a predicate and how often, and `calls --function` on that function
+lists each call with its position, arguments and return register. The outcome of a comparison (true, false or
+NULL) is written into a value the caller passes in, which the call log holds only where that value was captured as
+a referenced locator, so check what the calls show before stating outcomes. If the user has the run open in
+Internals Viewer, the Trace Timeline's Evaluations track on the operator's row ticks each of these calls coloured by
+its outcome (toggled under View > Operators or in the Operators pane's right-click menu); say so as an option, not
+as the evidence.
 
 ## Shaping the answer
 

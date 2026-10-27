@@ -1,4 +1,5 @@
-# internals-viewer-skills
+# Internals Viewer Skills
+
 LLM skills for Internals Viewer
 
 A skill is a folder with a `SKILL.md` that tells an LLM agent what the skill does, when to use it and how, together

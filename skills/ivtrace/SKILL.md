@@ -1,9 +1,27 @@
 ---
 name: ivtrace
-description: Read an Internals Viewer query run export (an .ivtrace file) and answer questions about the SQL Server query it captured - the SQL and actual plan, which pages were read from disk or the buffer pool, waits, locks and latches, columnstore segment scans and eliminations, the call tree of SQL Server engine functions behind each plan operator, and for a Full Trace run every logged call with its arguments, the trace timeline and memory. Use this whenever a user mentions an .ivtrace file, an Internals Viewer export, run, Full Trace or call tree, or asks what SQL Server did while running a query they captured, even if they only say "look at this trace" or "why did this query read so many pages".
+description: Explain how SQL Server executed a query from an Internals Viewer run export (an .ivtrace file) - the actual plan and what each operator did, the pages it read from disk or the buffer pool, waits, locks and latches, columnstore segment scans, the call tree of engine functions behind each operator, and for a Full Trace run every logged call with its arguments, the trace timeline and the query's memory. Internals Viewer is a learning tool for storage engine and query execution internals, so the export is the exact record of what happened and the answer teaches the mechanism at whatever depth the question asks, from "what is the hash join doing here" to "what are the scratch buffers in the RLE decompression for". Use this whenever a user mentions an .ivtrace file, an Internals Viewer export, run, Full Trace or call tree, or asks what SQL Server did or how something worked while running a query they captured, even if they only say "look at this trace".
 ---
 
 # Reading an Internals Viewer export
+
+## What this is for
+
+Internals Viewer is a tool for understanding how the SQL Server storage engine and query processor work, by
+watching them execute a real query in detail. It is not a tool for tuning a query. Deciding whether the plan was a
+good one, why the estimates differed from the actual rows, or which index would have been better is the query
+optimizer's domain and outside what the tool records. What the export holds is exactly what the engine did with
+the plan it was given, down to each function call, and the job here is to explain that: "this used a hash join,
+which reads one input into a hash table and probes it with the other"; "here is how it works in this run: the build
+phase is `CQScanHash::Open` calling `GetRow` into the underlying seek until it is exhausted"; "yes, it filters
+there: the predicate is on the seek in the plan, and the evaluation calls recorded under that operator show each
+comparison being made". Understanding the mechanism this well is what makes troubleshooting possible, but the
+understanding is the product.
+
+The user may be new to SQL Server or an expert in its internals. The complexity of the question sets the level of
+the answer, and the trace can answer at any level because it records everything that happened.
+
+## What the file is
 
 An `.ivtrace` file is a zip written by Internals Viewer's **Query > Export to file**. It holds one query run: the
 SQL, the Messages pane, the actual execution plan, every captured event, any transaction log records, and the call
@@ -29,8 +47,8 @@ through its `extract` command or by importing its `Export` class in your own Pyt
    [references/engine-symbols.md](references/engine-symbols.md) to read SQL Server function names, and
    [references/full-trace-investigations.md](references/full-trace-investigations.md) for how to explain what an
    operator, a batch or a block of memory is doing from a Full Trace.
-4. Answer with the evidence: event ids, node ids, page addresses and counts straight from the commands, so the
-   user can find the same thing in the app.
+4. Answer with the evidence: event ids, node ids, page addresses and counts straight from the commands, so every
+   claim can be checked against the file, and found in the app by a user who happens to have the run open.
 
 ```bash
 python <skill-dir>/scripts/ivtrace.py "<file.ivtrace>" summary
@@ -86,15 +104,31 @@ CallStore(export)                    # calllog.bin: functions, calls(key), locat
 | Full Trace: which iterator object ran each plan node, which produced each output column, where each thread ended | `plannodes`, `output`, `teardowns` |
 | Explain what an operator, a sort, a hash join or a batch is doing | [full-trace-investigations.md](references/full-trace-investigations.md) |
 
-## Full Trace questions go deep
+## The depth follows the question
 
-A Full Trace is recorded for one reason: to see how the engine executed the query, at the level of its functions,
-objects and memory. Expect questions like "explain what the Sort operator is doing", "what is the batch using
-those vectors for" or "what does this field of the hash join hold", and expect to answer them from several
-commands run in turn: the operator's entry frames, its call tree by phase with counts, its methods and arguments
-from the call log, its allocations by class and site, the writes to its object with their writers, and its cost in
-instructions. Organise the answer by phase, cite node ids, addresses, block numbers and positions, and mark what
-is read from a name rather than recorded. [full-trace-investigations.md](references/full-trace-investigations.md)
+"This used a hash join, what does that mean?" wants the idea: the build input is read into a hash table, then each
+probe row is hashed to find its matches. "How does it work here?" wants the mechanism from the trace:
+`CQScanHash::Open` runs `ConsumeBuild`, which calls `GetRow` on the underlying seek until it is exhausted, and then
+each `GetRow` on the join probes with one row from the other side. "Does it filter there?" wants the evidence: the
+plan's predicate on the seek, and the predicate evaluations recorded on that operator with their results. "What are
+the scratch buffers in the RLE decompression for?" wants the columnstore decode pipeline, the buffers it allocated
+by site and the functions that wrote them. Each is answered from the same export at a different depth, and each
+answer can offer the next level down.
+
+Do not assume the user has the run open in Internals Viewer. They may have exported it precisely because they are
+away from the app, or are asking on behalf of someone else, so every answer has to stand on the export alone, with
+the evidence quoted from the commands. Where the app would show the same thing more directly, add it as an aside
+that names the assumption: "if you have the run open in Internals Viewer, the Trace Timeline's Evaluations track
+on the seek shows each comparison's result". The app's views, for those asides: the Call Tree for the merged paths
+and counts, Arguments on a frame for the values it was passed, the Trace Timeline's operator rows with their
+GetRow, Reads and Evaluations tracks (toggled under View > Operators or in the Operators pane's right-click menu),
+and Memory History for an object's writes over the run.
+
+A Full Trace is where the deepest questions land: "explain what the Sort operator is doing", "what is the batch
+using those vectors for", "what does this field of the hash join hold". Answer them from several commands in turn
+(entry frames, the call tree by phase with counts, methods and arguments from the call log, allocations by class
+and site, the writes to the object with their writers, cost in instructions), organised by phase and cited by node
+id, address, block number and position. [full-trace-investigations.md](references/full-trace-investigations.md)
 has the method, a worked hash join and the batch memory layout.
 
 ## How to read what comes back
@@ -159,9 +193,14 @@ the Full Trace detail (arguments, timeline, memory) is not readable from this fi
 - Keep what the export records apart from what you infer. A function's name suggests what it does;
   [engine-symbols.md](references/engine-symbols.md) explains the naming and marks what is inferred. Say "this looks
   like" for a function you are reading by name alone.
-- For "why" questions, line up the plan (estimated against actual rows, warnings, the memory grant), the reads (disk
-  against buffer, read-ahead, extents), the waits, the operators (start, first row, duration, threads), then the hot
-  call paths and the biggest allocators. Each is one command.
+- Explain the mechanism rather than diagnose the query. Internals Viewer shows what the engine did, not what the
+  optimizer should have chosen. A question about estimates against actuals, a missing index or a better plan is the
+  optimizer's responsibility and outside what the export records: say so in a sentence, then explain what the chosen
+  plan did, because that understanding is where troubleshooting comes from. Estimates, warnings and the grant are
+  context for reading the plan, not the subject.
+- Teach progressively. Answer the question at its own level, then offer the next step down ("the probe is 99
+  `GetRow` calls on the join; want to see what each one does?"). Mention where the same thing appears in the app
+  only as an option, prefixed with "if you have the run open", never as the way to see the evidence.
 - For "what did operator X do" questions use `calltree --operator`, then `calls --function` on the interesting
   function with `--instance` set to the operator's iterator address when it is a method of the iterator.
 - Count what the user asked for in the unit they asked for: reads (events) are not pages (an extent read is 8 pages,
