@@ -40,8 +40,12 @@ through its `extract` command or by importing its `Export` class in your own Pyt
 1. Run `summary` first, every time. It gives the query, server and database, whether the run succeeded, the run
    options that decide how to read everything else, the plans and call trees present, event counts by type, and
    which entries exist and whether the binary sections are in a layout the script reads.
-2. Pick the commands that answer the question (table below). Combine them: a "why is this slow" question needs the
-   plan, the reads, the waits, the operators and the hot paths of the call tree together.
+2. Discover in this order, and stop at the level the question needs: the **query** (`summary` and `plan`: what
+   ran and the shape of the plan), then the **operators** (`operators`: which operators ran, their phases, rows and
+   threads), then the **calls** (`calltree --operator N` for what an operator's code did by phase, `calls` for the
+   values a function was passed), then the **memory history**, when the export has it (`memoryhistory` for an
+   object's state over the run, `memorymap` for what the memory was). Each level is the big picture for the next.
+   The table below maps questions to commands within those levels.
 3. Read the references when you need them: [references/events.md](references/events.md) for what each event type
    and field means, [references/format.md](references/format.md) for the exact layout of every entry,
    [references/engine-symbols.md](references/engine-symbols.md) to read SQL Server function names, and
@@ -185,6 +189,26 @@ the page itself is the locator printed under the call.
 not know with a clear message. The JSON entries, the plan and the call tree always read, so answer from those and say
 the Full Trace detail (arguments, timeline, memory) is not readable from this file.
 
+## Left out on purpose
+
+Several things are absent from a Full Trace export by design. None of them is a gap in the capture or a sign that
+something went wrong:
+
+- **Extended Events and tracing calls** are cut from the call tree. Publishing an event is code that runs on the
+  query's own thread, so the Extended Events machinery would otherwise dominate the tree. The removed subtrees are
+  kept in `calltree-detached.jsonl` only because the timeline and call log still point at them. The actual-plan
+  profiling wrappers (`CQScanProfileNew`, `CQScanLightProfileNew`) stay, because the operators run inside them.
+- **The event session is minimal.** A Full Trace run captures only the batch start and end, the per-operator
+  profile, the actual plan and the parallelism waits that identify worker threads. There are no lock, latch, page
+  read or I/O events in a Full Trace export; that detail comes from the calls instead.
+- **SQLOS (`sqldk`) and Windows are not recorded.** Only `sqlmin` and `sqllang` are. Calls into the scheduler,
+  memory objects, synchronisation and the operating system appear as the entry call only, so waiting, memory
+  allocation inside SQLOS and disk I/O add almost no instructions. Instruction counts measure recorded engine code.
+- **There is no clock.** Positions and instructions are the only measures. Nothing in a Full Trace is a duration.
+- **Crop to query** trims the call tree and events to the statement's execution, so the batch handling above it
+  and anything before the query started are not there.
+- **Result rows, the TTD recording itself and the database** are never exported.
+
 ## Answering well
 
 - Lead with the answer, then the evidence. "It read 240 pages from disk in 30 extent reads of
@@ -198,9 +222,24 @@ the Full Trace detail (arguments, timeline, memory) is not readable from this fi
   optimizer's responsibility and outside what the export records: say so in a sentence, then explain what the chosen
   plan did, because that understanding is where troubleshooting comes from. Estimates, warnings and the grant are
   context for reading the plan, not the subject.
+- Do not suggest changes to the query, its indexes or its hints unless the user asks for them. The export shows
+  what ran. Advice on what to run instead is a different conversation, and offered unasked it turns an explanation
+  into a review.
 - Teach progressively. Answer the question at its own level, then offer the next step down ("the probe is 99
   `GetRow` calls on the join; want to see what each one does?"). Mention where the same thing appears in the app
   only as an option, prefixed with "if you have the run open", never as the way to see the evidence.
+- Big picture first. Open with the shape of what happened (the plan, the operators, their phases and row counts)
+  and go into function-level detail only in the direction the question points. Do not start with instruction
+  counts, hot functions or oddities.
+- Mechanism, not performance. Do not rank hot spots, hunt anomalies or call a number "suspicious" unless the user
+  asks about cost. Much of any run is routine housekeeping: yields and abort checks, scheduler accounting, stack
+  and security cookie checks, profiling timers, `memcpy`. These are scenery, listed under "Routine work in every
+  run" in [engine-symbols.md](references/engine-symbols.md), and a large share under one of them is normal. Take the
+  recorded numbers as recorded rather than auditing how the tool counted them.
+- Stay on the question. A trace is full of true, interesting things that have nothing to do with what was asked. A
+  side finding earns at most one closing sentence, and only when it bears on the question.
+- Know what was left out on purpose, listed in the next section, so an absence is reported as "not captured in a
+  Full Trace" rather than as something missing or odd.
 - For "what did operator X do" questions use `calltree --operator`, then `calls --function` on the interesting
   function with `--instance` set to the operator's iterator address when it is a method of the iterator.
 - Count what the user asked for in the unit they asked for: reads (events) are not pages (an extent read is 8 pages,

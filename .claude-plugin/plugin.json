@@ -1,6 +1,6 @@
 {
   "name": "internals-viewer",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Skills for Internals Viewer: read an exported query run (.ivtrace) and answer questions about what SQL Server did to execute the query",
   "author": {
     "name": "danny-sg",

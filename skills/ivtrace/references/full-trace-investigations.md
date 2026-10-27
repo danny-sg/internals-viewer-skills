@@ -41,30 +41,61 @@ Positions are hex `Sequence:Steps` everywhere, and instructions are the only mea
 
 ## The method
 
-1. **Locate the operator.** `operators --frames` gives the plan node, the iterator address (`this`), the entry frames
+Discovery runs in one order: the query, then its operators, then their calls, then the memory history where the
+export has one. Each level is the big picture for the next, and the question decides how far down to go.
+
+1. **Start with the query.** `summary` for what ran, where, with which options and whether it succeeded, then
+   `plan` for the shape of the plan: the operators, how they nest, the rows each produced. Say this shape first.
+2. **Locate the operator.** `operators --frames` gives the plan node, the iterator address (`this`), the entry frames
    where its execution starts and the exit frames where its children take over. `plannodes` lists the same
    iterator objects with the position each was constructed.
-2. **Walk its calls by phase.** `calltree --operator N --depth 3` prints the operator's own work. Expect three kinds
-   of entry frame: `Open` (setting up rowsets, partitions, memory), the first `GetRow` (which does the one-off work:
-   the b-tree descent, the hash build, consuming the whole input for a blocking operator) and the repeated `GetRow`
-   (one call per row returned). Call counts give the shape: a node called once per row, once per page, once per
-   batch. Open deeper subtrees with `--root`, find a function inside the segment with `--find X --operator N`, and
-   print context with `--path`.
-3. **Read its methods and arguments.** `calls --grep "<Class>"` is the list of the class's logged methods with
+3. **Walk its calls by phase, shape first.** `calltree --operator N --depth 3` prints the operator's own work. Expect
+   three kinds of entry frame: `Open` (setting up rowsets, partitions, memory), the first `GetRow` (which does the
+   one-off work: the b-tree descent, the hash build, consuming the whole input for a blocking operator) and the
+   repeated `GetRow` (one call per row returned). Call counts give the shape: a node called once per row, once per
+   page, once per batch. State that shape before anything else, and only then open the subtree the question points
+   at, with `--root`, `--find X --operator N` and `--path`.
+4. **Read its methods and arguments.** `calls --grep "<Class>"` is the list of the class's logged methods with
    counts. `calls --function "<Class>::<Method>" --instance <this>` dumps the calls on that object: RCX is `this`,
    RDX, R8 and R9 the next arguments, RAX the return, with page, row and object locators decoded under each call.
-4. **Map its memory.** `memorymap --grep <Class>` finds the object itself and anything else labelled with that
+5. **Map its memory.** `memorymap --grep <Class>` finds the object itself and anything else labelled with that
    class. `memorymap --by site` groups blocks by the source file and line that allocated them, which is how raw
    buffers with no class are told apart (`bpbatch.cpp:265` is a vector buffer, `qshashwf.cpp:2437` a hash workfile
    buffer). `memoryhistory --kind iterator` lists the operator objects that were written to, and `--iterator <this>`
    every block belonging to one.
-5. **Follow its state.** `memoryhistory --block N` summarises the writers of a block and its most written fields,
+6. **Follow its state, when the export has a memory history.** `memoryhistory --block N` summarises the writers of a block and its most written fields,
    then lists each write with position, offset, bytes, decoded value and writer. `--field 0x3B8` follows one field
    through the run, which is how a counter, a pointer or a flag is understood: who sets it, when, to what.
-6. **Weigh it.** `timeline --node <entry node id>` totals the instructions under that call tree node, and
-   `timeline --top 20 --node <id>` ranks its calls.
-7. **Tie it to the plan and the output.** `plan --detail` for predicates, seek keys, hash keys, estimates against
-   actual rows and the grant; `output` and `plannodes` for which iterator produced which output column.
+7. **Weigh it, roughly.** `timeline --node <entry node id>` totals the instructions under that call tree node, and
+   `timeline --top 20 --node <id>` ranks its calls. Use this to say which phase is the big one, not to profile:
+   the recorded query ran many times slower than normal, the profiling wrappers add work of their own, and a large
+   count under routine housekeeping is not a finding (see the next section).
+8. **Tie it to the plan and the output.** `plan --detail` for predicates, seek keys, hash keys and the grant, with
+   the estimates as context for reading the plan rather than a subject; `output` and `plannodes` for which iterator
+   produced which output column.
+
+## Big picture before detail
+
+Start every answer with the shape of what happened: the plan, the operators in the order they ran, each one's
+phases with their call counts, and how the rows moved. Only then go down, and only in the direction the question
+points. Opening with instruction counts, hot functions or oddities is the wrong order: the user asked how
+something works, and detail is the second step of teaching it, not the first.
+
+A Full Trace is about mechanism, not performance. Do not rank hot spots, hunt for anomalies or call a number
+"suspicious" unless the user asks about cost. Instruction shares are there to orient (the build is bigger than the
+probe), and a routine function with a large share is normal, because the engine spends much of its time on
+housekeeping. The housekeeping present in every run is listed under "Routine work in every run" in
+[engine-symbols.md](engine-symbols.md); treat it as scenery. The yield is the usual trap: in a 1,999-row hash
+build `YieldAndCheckForAbort` was called 250 times, once every few rows, and 77 of those calls switched the task
+out through `SOS_Task::PreWait`, `SOS_Scheduler::Suspend` and `SwitchContext`, under which the scheduler checked
+for aborted tasks, polled I/O completions and chose the next worker. Those calls carried two thirds of the build's
+instructions. That is the server cooperatively yielding and checking for a cancel, as it does in every query. Say
+"the build yielded 77 times" if it bears on the question, and move on. Do not set off to audit how the timeline
+counts instructions across a yield: take the recorded numbers as recorded, and interpret them with the big picture.
+
+Stay on the question. A trace is full of true, interesting things that have nothing to do with what was asked,
+and listing them turns an explanation into a tour. A side finding earns at most one closing sentence, and only
+when it bears on the question.
 
 ## Worked example: a row mode Hash Match
 
@@ -101,10 +132,6 @@ when `CValRefJoin::PvalInvokeSpecific` ran them (the join's key and residual exp
 initialising it to 0, then `ConsumeBuild` writing 0xFC, 0x1F5, 0x2EF and on: a value growing by about 250 per
 write during the build, so a running count updated in steps rather than per row. That reading is inferred from the
 pattern; the export records the writes, not the field's name.
-
-**Elsewhere in the same run.** `calls` lists `clr!GetTLSDummy` with 4,596 calls: `FORMAT()` is a CLR function, so
-the Filter's predicate crosses into the CLR for each of the 198 rows it tests, which `plan --detail` shows as
-`format([h].[Id]%(2),N'0')=N'0'`.
 
 ## Sort
 
