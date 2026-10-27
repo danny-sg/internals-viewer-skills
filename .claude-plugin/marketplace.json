@@ -1,0 +1,16 @@
+{
+  "name": "internals-viewer-skills",
+  "description": "LLM skills for Internals Viewer",
+  "owner": {
+    "name": "danny-sg",
+    "url": "https://github.com/danny-sg"
+  },
+  "plugins": [
+    {
+      "name": "internals-viewer",
+      "source": "./",
+      "description": "Read an Internals Viewer query run export (.ivtrace) and answer questions about what SQL Server did to execute the query",
+      "keywords": ["sql-server", "internals-viewer", "ivtrace", "full-trace"]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "internals-viewer",
+  "version": "0.1.0",
+  "description": "Skills for Internals Viewer: read an exported query run (.ivtrace) and answer questions about what SQL Server did to execute the query",
+  "author": {
+    "name": "danny-sg",
+    "url": "https://github.com/danny-sg"
+  },
+  "homepage": "https://github.com/danny-sg/internals-viewer-skills",
+  "repository": "https://github.com/danny-sg/internals-viewer-skills",
+  "license": "MIT",
+  "keywords": ["sql-server", "internals-viewer", "ivtrace", "full-trace", "query-execution"]
+}

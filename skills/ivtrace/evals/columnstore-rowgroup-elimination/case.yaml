@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: columnstore-rowgroup-elimination
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  The export is a Full Trace run of SELECT * FROM ColumnstoreTable WHERE TradeId = 1000 on the InternalsViewerDemo database. The answer says rowgroups 1, 2 and 3 were eliminated from segment metadata (not the unique value filter) and rowgroup 0 was scanned; the predicate was applied on column 1 as a CompareEqual filter on the compressed data (ValueFast encoding, AVX2), producing 1 row from 1,048,576; the other columns were read without a filter; the segments and dictionaries all came from object pool hits, so nothing was read from disk.

@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: disk-vs-buffer-reads
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  The export is a Full Trace run of SELECT * FROM ClusteredTable WHERE Id >= 4004 AND Id < 6000 on the InternalsViewerDemo database with Clear Buffer Pool and Disable Read-Ahead on. The answer names the query (1996 rows), says the buffer pool was cold, and reports 30 disk reads covering 240 pages (extent reads of 8 pages) and 531 buffer pool reads over 225 distinct pages, all of dbo.ClusteredTable.pk_ClusteredTable, read by a Clustered Index Seek.

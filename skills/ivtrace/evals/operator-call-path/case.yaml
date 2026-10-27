@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: operator-call-path
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  The export is the same Full Trace run of SELECT * FROM ClusteredTable WHERE Id >= 4004 AND Id < 6000 as disk-vs-buffer-reads. The answer identifies the seek's entry frames (CQScanRangeNew::Open and CQScanNew::GetRowOrReQualifyHelper) and gives a path such as CQScanRowsetNew::GetRowWithPrefetch > RowsetNewSS::FetchNextRow > IndexDataSetSession::GetNextRowValuesInternal > IndexRowScanner > IndexPageManager::GetNextPage > BPool::Get, noting BPool::Get was called 222 times on that path with 222 pages as locators, and explains the names using the categories (query operator, rowset, b-tree navigation, buffer pool).
